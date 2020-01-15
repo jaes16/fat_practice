@@ -9,8 +9,7 @@
 
 
 
-/////////////////////////////////////////////////////// SIZES //////////////////////////////////////////////////////                                                                                                        
-
+/////////////////////////////////////////////////////// SIZES //////////////////////////////////////////////////////
 #define DISK_SIZE 10485759
 #define BLOCK_SIZE 4096
 #define CLUSTER_TOTALNUM 2560
@@ -111,8 +110,7 @@ void create_init_disk()
   // write out fat                                                                                                                     
   memset(&fat,0,sizeof(fat));
   for(int i = 0; i < 2556; i++){
-    // fill buffers with value for free                                                                                                 
-
+    // fill buffers with value for free
     fat[i] = FREE;
   }
   //make sure root dir cluster is allocated                                                                                            
@@ -121,16 +119,16 @@ void create_init_disk()
   pwrite(fd_disk,fat,(sizeof(int)*3072),BLOCK_SIZE);
 
 
-  // write out root dir                                                                                                                 
-  dir_entry dir_entries[4096]; //rather arbitrary size, but point is its bigger than block size                                         
+  // write out root dir                
+  dir_entry dir_entries[4096]; //rather arbitrary size, but point is its bigger than block size 
   memset(dir_entries, 0, sizeof(dir_entries));
-  //creating .                                                                                                                          
+  //creating . 
   dir_entries[0].first_cluster = 4;
   dir_entries[0].file_size = 2;
   dir_entries[0].dir_type = 1;
   memset(dir_entries[0].name,0,32);
   strcpy(dir_entries[0].name,".");
-  // creating ..                                                                                                                        
+  // creating .. 
   dir_entries[1].first_cluster = 4;
   dir_entries[1].file_size = 2;
   dir_entries[1].dir_type = 1;
@@ -146,33 +144,33 @@ void create_init_disk()
 
 static void* fat_init()
 {
-  // find where "disk" file should be                                                                                                   
+  // find where "disk" file should be 
   memset(disk_path, '\0', sizeof(disk_path));
   getcwd(disk_path, sizeof(disk_path));
   strcat(disk_path, "/fat_disk");
 
-  // see if "disk" file is initialized                                                                                                  
+  // see if "disk" file is initialized  
   if((disk = fopen(disk_path, "r+"))){
-    // if it is, read in superblock                                                                                                     
+    // if it is, read in superblock   
     fd_disk = fileno(disk);
     pread(fd_disk,&superblock,sizeof(superblock),0);
 
     pread(fd_disk,&fat, sizeof(fat),BLOCK_SIZE);
 
   }else{
-    // if it isn't, create file and write out initial superblock                                                                        
+    // if it isn't, create file and write out initial superblock 
     disk = fopen(disk_path, "w+");
     fseek(disk, DISK_SIZE, SEEK_SET);
     fputc('\0', disk);
 
-    // initial locations for fat and data                                                                                               
+    // initial locations for fat and data 
     superblock.s.fat_location = 1;
     superblock.s.fat_size = 3;
     superblock.s.data_location = 4;
     superblock.s.data_size = 2556;
-    // superblock.s.freelist_location = 5;                                                                                              
+    // superblock.s.freelist_location = 5;
 
-    // write out initialized disk                                                                                                       
+    // write out initialized disk  
     create_init_disk();
 
   }
@@ -205,46 +203,46 @@ int helper(char *path, char *ret){
 
 
 
-// return 0 if path exists, -1 if path doesn't exist, -2 if path name is too long, -3 if component of path is file                      
-// later, can remove last and just find it from path in this function                                                                   
+// return 0 if path exists, -1 if path doesn't exist, -2 if path name is too long, -3 if component of path is file
+// later, can remove last and just find it from path in this function
 static int dir_exists(char *path, int cluster_num, dir_entry *de, char *last)
 {
 
-  // bring in all the dir entries                                                                                                       
-  dir_entry dir_entries[4096];//[((4096/sizeof(dir_entries)) + 1)];                                                                     
+  // bring in all the dir entries 
+  dir_entry dir_entries[4096];//[((4096/sizeof(dir_entries)) + 1)]; 
   memset(dir_entries, 0, sizeof(dir_entries));
   pread(fd_disk, &dir_entries, 4096, (4096*cluster_num));
 
 
-  // name of the next directory in path to look for                                                                                     
-  //char* token = strtok(path, "/");                                                                                                    
+  // name of the next directory in path to look for
+  //char* token = strtok(path, "/");
   char token[32];
   int index;
-  // helper returns wrong result when path = token, so                                                                                  
+  // helper returns wrong result when path = token, so
   if((strcmp(path,last) != 0) && (strlen(path) != strlen(last))){
     index = helper(path,token);
-    // if name is too long                                                                                                              
+    // if name is too long 
     if(index == -2) return -2;
-    // should never return -1, but...                                                                                                   
+    // should never return -1, but... 
     if(index == -1) return -1;
   } else {
 
     strcpy(token,path);
   }
   int isFile = 0;
-  //search through dir_entries in current directory to see if the token is there                                                        
+  //search through dir_entries in current directory to see if the token is there
   for (int i = 0; i < 4096; i++){
     if(dir_entries[i].dir_type !=0){
-      if(strcmp(dir_entries[i].name, token) == 0){ //if we find a match                                                                 
-        if ((strcmp(token,last) ==0) && (strlen(path) == strlen(last))){ //if last component                                            
+      if(strcmp(dir_entries[i].name, token) == 0){ //if we find a match
+        if ((strcmp(token,last) ==0) && (strlen(path) == strlen(last))){ //if last component     
           strcpy(de->name,dir_entries[i].name);
           de->first_cluster = dir_entries[i].first_cluster;
           de->file_size = dir_entries[i].file_size;
           de->dir_type = dir_entries[i].dir_type;
           return 0;
         }else{
-          if (dir_entries[i].dir_type == 0) isFile = 1; //if match is file                                                              
-          else{ //if match is dir                                                                                                       
+          if (dir_entries[i].dir_type == 0) isFile = 1; //if match is file
+          else{ //if match is dir
             char path2[strlen(path)];
             for (int j = 0; j < strlen(path); j++){
               path2[j] = path[j+index];
@@ -263,15 +261,14 @@ static int dir_exists(char *path, int cluster_num, dir_entry *de, char *last)
 
 
 
-/*                                                                                                                                      
-  key: finish the find_dir method, getattr should check if target dir exists, if so                                                     
-  fill the stat struct *stbuf with the information in the dir_entry and return                                                          
-  if desired dir doesn't exist, return -ENOENT?                                                                                         
-                                                                                                                                        
-  mkdir is gonna suck                                                                                                                   
+/*
+  key: finish the find_dir method, getattr should check if target dir exists, if so 
+  fill the stat struct *stbuf with the information in the dir_entry and return
+  if desired dir doesn't exist, return -ENOENT?
+  mkdir is gonna suck 
 */
-//return file attributes, for path name, should fill in the elements of the stat struc                                                  
-//if a field is meaningless then it should be set to 0                                                                                  
+//return file attributes, for path name, should fill in the elements of the stat struc 
+//if a field is meaningless then it should be set to 0
 static int fat_getattr(const char *path, struct stat *stbuf)
 {
 
@@ -286,10 +283,10 @@ static int fat_getattr(const char *path, struct stat *stbuf)
     return -ENAMETOOLONG;
   }
 
-  // if root                                                                                                                            
+  // if root  
   if (strcmp(path, "/") == 0) {
-    // get directory size, and the rest is the usual                                                                                    
-    dir_entry dir_entries[4096];//[((4096/sizeof(dir_entries)) + 1)];                                                                   
+    // get directory size, and the rest is the usual
+    dir_entry dir_entries[4096];//[((4096/sizeof(dir_entries)) + 1)];
     memset(dir_entries, 0, sizeof(dir_entries));
     pread(fd_disk, &dir_entries, 4096, (4096*4));
 
@@ -300,14 +297,14 @@ static int fat_getattr(const char *path, struct stat *stbuf)
     return res;
   } else {
 
-    // prepare for dir_exists call                                                                                                      
+    // prepare for dir_exists call 
     char path2[PATH_MAX];
     strcpy(path2,path);
     if(path2[0] == '/'){
-      // remove root                                                                                                                    
-      memmove(path2, path2+1, sizeof(path2)-1); //same fix as in getattr                                                                
+      // remove root
+      memmove(path2, path2+1, sizeof(path2)-1); //same fix as in getattr 
     }
-    // get name of dir we want                                                                                                          
+    // get name of dir we want    
     char *dup = strdup(path2);
     char *last;
     last = basename(dup);
@@ -315,22 +312,22 @@ static int fat_getattr(const char *path, struct stat *stbuf)
     int cluster_num = 4;
     dir_entry de;
 
-    //if path doesn't exist or name is too long, return error                                                                           
+    //if path doesn't exist or name is too long, return error   
     int call_rslt = dir_exists(path2,cluster_num,&de, last);
     if (call_rslt == -1) return -ENOENT;
     if (call_rslt == -2) return -ENAMETOOLONG;
     if (call_rslt == -3) return -ENOTDIR;
-    else if (de.dir_type == 1) { //if path does exist, return correct attributes                                                        
+    else if (de.dir_type == 1) { //if path does exist, return correct attributes  
       stbuf -> st_mode = S_IFDIR | 0755;
       stbuf -> st_nlink = de.file_size;
       stbuf -> st_size = 4096;
       stbuf -> st_blocks = 1;
     }else{
-      // check permissions                                                                                                              
+      // check permissions    
       if(de.read_only == 1) stbuf -> st_mode = S_IFREG | 0444;
       else stbuf->st_mode = S_IFREG | 0666;
       stbuf -> st_nlink = 1;
-      stbuf -> st_size = de.file_size; // by multiple of blocks                                                                         
+      stbuf -> st_size = de.file_size; // by multiple of blocks
       int b = (de.file_size/4096);
       if((de.file_size%4096) != 0) b++;
       stbuf -> st_blocks = b;
@@ -343,15 +340,124 @@ static int fat_getattr(const char *path, struct stat *stbuf)
 
 
 
+static int fat_access(const char *path, int mask)
+{
+
+  // see if name is too long
+  if((strlen(basename(strdup(path)))>32) || (strlen(path) > PATH_MAX)){
+    return -ENAMETOOLONG;
+  }
+  
+
+  // i am groot
+  if (strcmp(path, "/") == 0) {
+    return 0;
+  } else {
+
+    // prepare for dir_exists call
+    char path2[PATH_MAX];
+    strcpy(path2,path);
+    if(path2[0] == '/'){
+      // path2++;
+      memmove(path2, path2+1, sizeof(path2)-1); //same fix as in getattr
+    }
+
+    // get name of dir we want
+    char *dup = strdup(path2);
+    char *last;
+    last = basename(dup);
+
+    int cluster_num = 4;
+    dir_entry de;
+
+    // if path doesn't exist, return error
+    int call_rslt = dir_exists(path2,cluster_num,&de, last);
+    if (call_rslt == -1) return -ENOENT;
+    if (call_rslt == -2) return -ENAMETOOLONG;
+    if (call_rslt == -3) return -ENOTDIR;
+    else if (de.dir_type == 1){ // if path does exist, check for permissions
+      // but all directories are 0755 so...
+      return 0;
+    }else{
+      if((mask & W_OK) && (de.read_only == 1)){
+	return -EACCES;
+      }
+      return 0;
+    }
+  }
+
+}
+
+
+
+
+
+
+static int fat_readdir(const char *path, dir_entry *ret, off_t offset)
+{
+  // see if name is too long
+  if((strlen(basename(strdup(path)))>32) || (strlen(path) > PATH_MAX)){
+    return -ENAMETOOLONG;
+  }
+
+  // get respective cluster number (4 for groot)
+  int cluster_num = 4;
+
+  if(strcmp(path, "/") != 0){
+    // prepare for dir_exists call
+    char path2[PATH_MAX];
+    strcpy(path2,path);
+    if(path2[0] == '/'){
+      // path2++;
+      memmove(path2, path2+1, sizeof(path2)-1); //same fix as in getattr
+    }
+
+    // get name of dir we want
+    char *dup = strdup(path2);
+    char *last;
+    last = basename(dup);
+
+    dir_entry de;
+
+    int call_rslt = dir_exists(path2,cluster_num,&de, last);
+    if (call_rslt == -1) return -ENOENT;
+    if (call_rslt == -2) return -ENAMETOOLONG;
+    if (call_rslt == -3) return -ENOTDIR;
+    cluster_num = de.first_cluster;
+  }
+
+
+  dir_entry dir_entries[4096];
+  memset(dir_entries, 0, sizeof(dir_entries));
+  pread(fd_disk, &dir_entries, 4096, (4096*cluster_num));
+
+
+  //search through to add all dir_entries in directory
+  int i;
+  for (i = offset; i < 4096; i++){
+    if(dir_entries[i].dir_type !=0){
+      strcpy(ret[i-(offset+1)].name, dir_entries[i].name);
+      ret[i-(offset+1)].first_cluster = dir_entries[i].first_cluster;
+      ret[i-(offset+1)].file_size = dir_entries[i].file_size;
+      ret[i-(offset+1)].dir_type = dir_entries[i].dir_type;
+      ret[i-(offset+1)].read_only = dir_entries[i].read_only;
+    }
+  }
+
+  return 0;
+}
+
+
+
+
+
 
 static int fat_mkdir(const char* path, mode_t mode)
 {
 
   // separate path and name of last dir
-  char *dup1 = strdup(path);
-  char *dup2 = strdup(path);
-  char *parent_path = dirname(dup1);
-  char *dir_name = basename(dup2);
+  char *parent_path = dirname(strdup(path));
+  char *dir_name = basename(strdup(path));
 
 
   // can't make root
@@ -458,7 +564,7 @@ static int fat_mkdir(const char* path, mode_t mode)
       pread(fd_disk,&dir_entries, 4096, (4096*parent_de.first_cluster));
 
       // change parent cluster
-      strcpy(de.name,dir_name);
+      strcpy(de.name,basename(strdup(path)));
       for (int j = 0; j < max; j++){
 	if(dir_entries[j].dir_type == 0){
 	  dir_entries[j] = de;
@@ -680,59 +786,141 @@ int description_helper(char *path, char *ret){
   }
 }
 
+char* nodots_helper(char *path){ 
+
+  char ret[4096];
+  char dup[4096];
+  char dup2[4096];
+
+  memset(ret,0,4096);
+  memset(dup,0,4096);
+  memset(dup2,0,4096);
+
+  //9 base cases
+  //just "/."
+  if(strcmp(path,"/.") == 0){
+    memset(path,0,strlen(path));
+    path[0] = '/';
+    return path;
+  }
+  //just "/.."
+  else if(strcmp(path,"/..") == 0){
+    memset(path,0,strlen(path));
+    path[0] = '/';
+    return path;
+  }
+  //starts with "/./...", or has "..././..."
+  else if(strstr(path,"/./") != NULL){
+    // see if it starts "/./"
+    if(strcmp(strstr(path,"/./"),path) == 0){
+      // just remove /.
+      path = path+2;
+      strcpy(ret,path);
+    }    
+    else{ //if "..././..."
+      // get index of /./
+      int index = strstr(path, "/./") - path;
+      // split into two halves, without /.
+      strcpy(dup,(strstr(path, "/./") + 2));
+      strncpy(ret,path,index);
+      // merge
+      strcat(ret,dup);
+    }
+    return nodots_helper(ret);
+  }
+  //starts with "/../...", or has ".../../..."
+  else if(strstr(path,"/../") != NULL){
+    // see if it starts with "/../"
+    if(&(strstr(path,"/../")[0]) == & path[0]){
+      // just remove /..
+      path = path+3;
+      strcpy(ret,path);
+    }     
+    //if ".../../..." (because strstr always looks for the first instance, we never are looking at the second of /../../, for example
+    else{ 
+      // get index of /../
+      int index = strstr(path, "/../") - path;
+      // copy first half
+      strncpy(dup2,path,index);
+      // remove last directory of first half
+      strcpy(ret,dirname(dup2));
+      //incase we've come down to root. Then dirname(dup2) returns / -> "//nextfile/..."
+      if(strcmp(ret,"/") == 0) strcpy(dup,(strstr(path, "/../") + 4));
+      // copy second half without /..
+      else strcpy(dup,(strstr(path, "/../") + 3));
+      // merge
+      strcat(ret,dup);
+    }
+    return nodots_helper(ret);
+  }
+  // seeing if path ends with "/." or "/.."
+  else if(strstr(path,"/.") != NULL){
+    //if path ends with /. (otherwise, it would be /./, or /.hi and etc.
+    if(strcmp(strstr(path,"/."),"/.") == 0){       
+      // get rid of /.
+      strcpy(ret,dirname(path));
+      return nodots_helper(ret);
+    }
+    //if path ends with /.. (otherwise, it would be /../, or /..hi and etc.
+    else if(strcmp(strstr(path,"/.."),"/..") == 0){ 
+      // get rid of /.. and previous directory
+      strcpy(dup,dirname(path));
+      strcpy(ret,dirname(dup));
+      return nodots_helper(ret);
+    }
+  }
+  // no dots
+  else {
+    return path;
+  }
+  // shouldn't reach here, but...
+  return path;
+}
+
+
+
 static int instruct_ls(char *path){
 
   char descriptions[PATH_MAX];
   int num_descript = 0;
 
-  // no descriptions
-  if((path == NULL) || ((num_descript = description_helper(path,descriptions)) == 0)){
-    // read in subfiles of working directory
-    
+  //  if((num_descript = description_helper(path,descriptions)) == 0){
+  // read in subfiles of working directory
+  
+  int err = 0;
+  
+  dir_entry dir_entries[4096];
+  memset(dir_entries, 0, sizeof(dir_entry)*4096);
 
-    dir_entry de;
-    int err = 0;
-
-    // in working directory
-    if(path == NULL){
-      // see if working directory is root
-      if(strcmp(workdir,rootdir) == 0){
-	err = dir_exists(".",4,&de,".");
-
-      }
-      else {
+  
+  // in working directory
+  if(path == NULL || (strcmp(path,"/") == 0)){
+    // see if working directory is root
+    if(strcmp(workdir,rootdir) == 0){
+      err = fat_readdir(rootdir, dir_entries, 0);
+    }
+    else {
       char *dup = strdup(workdir);
-      char *dup1 = strdup(rootdir);
-      char *last;
-      last = basename(dup);
       
-      err = dir_exists(dup1,4,&de,last);
-      }
+      err = fat_readdir(dup, dir_entries, 0);
     }
-    else {    // in another directory
-
-      char *dup = strdup(path);
-      char *last;
-      last = basename(dup);
-
-      // concat the workdir with further path
-      // first check if the path + workdir exceeds path name length
-      if((strlen(path) + strlen(workdir)) > PATH_MAX) return -ENAMETOOLONG;
-
-      char *dup1 = strdup(workdir);
-      strcat(dup1,path);
-
-      err = dir_exists(dup1,4,&de,last);
-
-    }
-
-    if(err != 0) return err;
-
-    // print out nonhidden subfiles of de.
-    dir_entry dir_entries[4096];
-    memset(dir_entries, 0, sizeof(dir_entries));
-    pread(fd_disk, &dir_entries, 4096, (4096*de.first_cluster));
-
+  }
+  else {    // in another directory
+    
+    // concat the workdir with further path
+    // first check if the path + workdir exceeds path name length
+    if((strlen(path) + strlen(workdir)) > PATH_MAX) return -ENAMETOOLONG;
+    
+    char *dup1 = strdup(workdir);
+    strcat(dup1,path);
+    
+      err = fat_readdir(dup1, dir_entries, 0);
+      
+  }
+  
+  if(err != 0) return err;
+  
+  // print out nonhidden subfiles of de.
     for(int i = 0; i <4096; i++){
       // if a dir entry isn't hidden (ie starts with .)
       if((dir_entries[i].dir_type != 0) && (!(dir_entries[i].name[0] == '.'))){
@@ -740,12 +928,14 @@ static int instruct_ls(char *path){
       }
     }
     printf("\n");
-  }
-  
+
 
   // if there are descriptions, switch by case (if statements in c)
   return 0;
 }
+
+
+
 
 
 
@@ -754,54 +944,80 @@ static int instruct_cd(char *path){
   char descriptions[PATH_MAX];
   int num_descript = 0;
 
-
-  // no descriptions
-  if((num_descript = description_helper(path,descriptions)) == 0){
-    // read in subfiles of working directory
-    
-    dir_entry de;
-    
-    // in working directory
-    if(path == NULL){
-      //
-      //change working directory to root
-      strcpy(workdir,rootdir);
-      workdir_clusternum = 4;
-    }
-    else {    // in another directory
-
-      char *dup = strdup(path);
-
-      int err = 0;
-
-      // check if path is from root
-      if(path[0] == '/') err = fat_access(path,R_OK);
-      // or if working directory is root
-      else if (strcmp(workdir,rootdir) == 0){
-	dup = strdup(rootdir);
-	strcat(dup,path);
-	err = fat_access(dup,R_OK);
-      }      
-      else { // if path is from working directory, concat with workdir path
-	// see if path doesn't exceed size
-	if((strlen(workdir) + strlen(path)) > PATH_MAX) return -ENAMETOOLONG;
-	dup = strdup(workdir);
-	strcat(dup,"/");
-	strcat(dup,path);
-	err = fat_access(dup,R_OK);
-	
-      }
-      
-      if(err != 0) return err;
-      
-      // change working directory to this one
-      strcpy(workdir,dup);
-      workdir_clusternum = de.first_cluster;
-    }
-
-  }
   
+  
+  //  if((num_descript = description_helper(path,descriptions)) == 0){
+  // read in subfiles of working directory
+  
+  // in working directory
+  if((path == NULL) || (strcmp(path,"/") == 0)){
+    
+    //change working directory to root
+    strcpy(workdir,rootdir);
+    workdir_clusternum = 4;
+  }
+  else if(strcmp(path,".") == 0){
+    // how wonderful. no work.
+    return 0;
+  }
+  else if(strcmp(path,"..") == 0){
+    // if in root, no work.
+    if(strcmp(workdir,rootdir) == 0) return 0;
+    // change working directory to previous directory
+    strcpy(workdir,dirname(strdup(workdir)));
+    
+    // get working directory cluster num
+    dir_entry de;
+    dir_exists(workdir, 4, &de, basename(strdup(workdir)));
+    workdir_clusternum = de.first_cluster;
+    return 0;
+  }
+  else {    // in another directory
 
+
+    char dup[4096];
+    strcpy(dup,path);
+
+    
+    // check if path is from root
+    if(path[0] == '/'){}//dont do anything
+    // or if working directory is root
+    else if (strcmp(workdir,rootdir) == 0){
+      memset(dup, 0, strlen(dup));
+      strcpy(dup, rootdir); //set beginning as /
+      strcat(dup, path);
+    }      
+    else { // if path is from working directory, concat with workdir path
+      // see if path doesn't exceed size
+      if((strlen(workdir) + strlen(path)) > PATH_MAX) return -ENAMETOOLONG;
+      memset(dup, 0, strlen(dup));
+      strcpy(dup, workdir);
+      strcat(dup,"/");
+      strcat(dup,path);
+    }
+
+
+    int err = 0;
+    err = fat_access(dup,R_OK);    //path still works without taking care of . and ..
+    if(err != 0) return err;
+
+    // take care of . and ..
+    char dup2[4096];
+    strcpy(dup2,dup);
+    memset(dup,0,strlen(dup));
+    strcpy(dup,nodots_helper(dup2));
+
+
+
+    
+    // change working directory to this one
+    strcpy(workdir,dup);
+
+    // get working directory cluster num
+    dir_entry de;
+    dir_exists(workdir,4,&de,basename(strdup(workdir)));
+    workdir_clusternum = de.first_cluster;
+  }
 
   // if there are descriptions, switch by case (if statements in c)
   return 0;
@@ -812,38 +1028,36 @@ static int instruct_cd(char *path){
 
 static int instruct_mkdir(char *path){
   
-char descriptions[PATH_MAX];
+  char descriptions[PATH_MAX];
   int num_descript = 0;
 
 
-  // no descriptions
-  if((num_descript = description_helper(path,descriptions)) == 0){
-    // read in subfiles of working directory
+  
+  //if((num_descript = description_helper(path,descriptions)) == 0){
+  // read in subfiles of working directory
+  
     
-    
-    // no path?
-    if(path == NULL) return -ENOENT;
-
-    else {    // making new directory
+  // no path?
+  if(path == NULL) return -ENOENT;
+  
+  else {    // making new directory
       //check permission in parent directory
-
-      int err = 0;
-      // check if path is from root
-      if(path[0] == '/') err = fat_mkdir(path,(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH));
-      // or if working directory is root
-      else if (strcmp(workdir,rootdir) == 0) err = fat_mkdir(strcat(strdup(rootdir),path),(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH));
-      else { // if path is from working directory, concat with workdir path
-	// see if path doesn't exceed size
-	if((strlen(workdir) + strlen(path)) > PATH_MAX) return -ENAMETOOLONG;
-	char *dup = strdup(workdir);
-	strcat(dup,"/");
-	strcat(dup,path);
-	err = fat_mkdir(dup,(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH));
-		
-      }
-      if (err != 0) return err;
+    
+    int err = 0;
+    // check if path is from root
+    if(path[0] == '/') err = fat_mkdir(path,(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH));
+    // or if working directory is root
+    else if (strcmp(workdir,rootdir) == 0) err = fat_mkdir(strcat(strdup(rootdir),path),(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH));
+    else { // if path is from working directory, concat with workdir path
+      // see if path doesn't exceed size
+      if((strlen(workdir) + strlen(path)) > PATH_MAX) return -ENAMETOOLONG;
+      char *dup = strdup(workdir);
+      strcat(dup,"/");
+      strcat(dup,path);
+      err = fat_mkdir(dup,(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH));
+      
     }
-
+    if (err != 0) return err;
   }
   
 
@@ -883,7 +1097,7 @@ int main(){
   // continuously get commands, until quit.
   fgets(command, COM_LENGTH, stdin);
   while (strcmp(command, "quit\n") != 0) {
-
+    
     // get rid of \n at the end of the string
     command[(strlen(command)-1)] = 0;
 
@@ -892,21 +1106,32 @@ int main(){
     if(strchr(command, ' ') == NULL){
       
       if(strcmp(command,"ls") == 0){
-	instruct_ls(NULL);
+	err = instruct_ls(NULL);
       }
       else if(strcmp(command,"cd") == 0){
-	instruct_cd(NULL);
+	err = instruct_cd(NULL);
       }
-      
+      else if(strcmp(command,"mkdir") == 0){
+	err = instruct_mkdir(NULL);
+      }
+      else if(strlen(command) == 0){
+	// do you wanna build a snow man-
+	// okay bye
+      }
+      else{
+	printf("Error: Command not recognized\n");
+      }
     }
     else{
 
       //split into command and rest
       char mand[COM_LENGTH];
+      memset(mand,0,COM_LENGTH);
       strcpy(mand,strchr(command, ' ')+1);
 
       int index = strchr(command, ' ') - command;
       char com[COM_LENGTH];
+      memset(com,0,COM_LENGTH);
       strncpy(com,command,index);
 
 
@@ -953,8 +1178,8 @@ int main(){
 
     printf("%s user: ", workdir);
     // next command. bring it on!
-    memset(command,0,200);
-    fgets(command, 200, stdin);
+    memset(command, 0, COM_LENGTH);
+    fgets(command, COM_LENGTH, stdin);
 
   }
 }
