@@ -778,7 +778,7 @@ static int fat_mknod(const char* path, mode_t mode, dev_t rdev)
     // can't make root
     if(strcmp(path,"/") == 0) return -ENOENT;
     // see if name is too long
-    if((strlen(basename(path))>32) || (strlen(path) > PATH_MAX)){
+    if((strlen(basename(strdup(path)))>32) || (strlen(path) > PATH_MAX)){
       return -ENAMETOOLONG;
     }    
 

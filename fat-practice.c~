@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <math.h>
 
 
 
@@ -30,6 +31,8 @@
 #define ENAMETOOLONG 36 //file name too long
 #define ENOTEMPTY 39 //directory not empty
 #define ELOOP 40 //too many links
+
+#define ECOMMAND -1 //command in the wrong format. My own shtuf
 
 
 /////////////////////////////////////////////////////// DEFINITION OF DATA STRUCTURES  /////////////////////////////
@@ -60,7 +63,7 @@ typedef struct
   int first_cluster;
   int file_size; // in bytes                                                                                   
   int dir_type; // 0 for empty, 1 for directory, 2 for file                                                    
-  int read_only; // 0 for read and write, 1 for read only                                                      
+  mode_t mode; // 0 for read and write, 1 for read only                                                      
   char name[32];
 }dir_entry;
 
@@ -126,12 +129,14 @@ void create_init_disk()
   dir_entries[0].first_cluster = 4;
   dir_entries[0].file_size = 2;
   dir_entries[0].dir_type = 1;
+  dir_entries[0].mode = S_IFDIR | 0755;
   memset(dir_entries[0].name,0,32);
   strcpy(dir_entries[0].name,".");
   // creating .. 
   dir_entries[1].first_cluster = 4;
   dir_entries[1].file_size = 2;
   dir_entries[1].dir_type = 1;
+  dir_entries[1].mode = S_IFDIR | 0755;
   memset(dir_entries[1].name,0,32);
   strcpy(dir_entries[1].name,"..");
   pwrite(fd_disk, &dir_entries, 4096, (4*4096));
@@ -290,7 +295,7 @@ static int fat_getattr(const char *path, struct stat *stbuf)
     memset(dir_entries, 0, sizeof(dir_entries));
     pread(fd_disk, &dir_entries, 4096, (4096*4));
 
-    stbuf -> st_mode = S_IFDIR | 0755;
+    stbuf -> st_mode = S_IFDIR | dir_entries[0].mode;
     stbuf -> st_nlink = dir_entries[0].file_size;
     stbuf -> st_size = 4096;
     stbuf -> st_blocks = 1;
@@ -318,14 +323,19 @@ static int fat_getattr(const char *path, struct stat *stbuf)
     if (call_rslt == -2) return -ENAMETOOLONG;
     if (call_rslt == -3) return -ENOTDIR;
     else if (de.dir_type == 1) { //if path does exist, return correct attributes  
-      stbuf -> st_mode = S_IFDIR | 0755;
+      //stbuf -> st_mode = S_IFDIR | 0755;
+      stbuf -> st_mode = S_IFDIR | de.mode;
+
       stbuf -> st_nlink = de.file_size;
       stbuf -> st_size = 4096;
       stbuf -> st_blocks = 1;
     }else{
       // check permissions    
-      if(de.read_only == 1) stbuf -> st_mode = S_IFREG | 0444;
-      else stbuf->st_mode = S_IFREG | 0666;
+      //if(de.read_only == 1) stbuf -> st_mode = S_IFREG | 0444;
+      //else stbuf->st_mode = S_IFREG | 0666;
+      
+      stbuf->st_mode = S_IFREG | de.mode;
+
       stbuf -> st_nlink = 1;
       stbuf -> st_size = de.file_size; // by multiple of blocks
       int b = (de.file_size/4096);
@@ -379,7 +389,7 @@ static int fat_access(const char *path, int mask)
       // but all directories are 0755 so...
       return 0;
     }else{
-      if((mask & W_OK) && (de.read_only == 1)){
+      if( (mask & W_OK) && (!(de.mode & W_OK)) ){
 	return -EACCES;
       }
       return 0;
@@ -434,13 +444,13 @@ static int fat_readdir(const char *path, dir_entry *ret, off_t offset)
 
   //search through to add all dir_entries in directory
   int i;
-  for (i = offset; i < 4096; i++){
+  for (i = 0; i < 4096; i++){
     if(dir_entries[i].dir_type !=0){
-      strcpy(ret[i-(offset+1)].name, dir_entries[i].name);
-      ret[i-(offset+1)].first_cluster = dir_entries[i].first_cluster;
-      ret[i-(offset+1)].file_size = dir_entries[i].file_size;
-      ret[i-(offset+1)].dir_type = dir_entries[i].dir_type;
-      ret[i-(offset+1)].read_only = dir_entries[i].read_only;
+      strcpy(ret[i].name, dir_entries[i].name);
+      ret[i].first_cluster = dir_entries[i].first_cluster;
+      ret[i].file_size = dir_entries[i].file_size;
+      ret[i].dir_type = dir_entries[i].dir_type;
+      ret[i].mode = dir_entries[i].mode;
     }
   }
 
@@ -545,6 +555,7 @@ static int fat_mkdir(const char* path, mode_t mode)
       de.first_cluster = i+4;
       de.file_size = 2;
       de.dir_type = 1;
+      de.mode = (mode | S_IFDIR);
       memset(de.name,0,sizeof(de.name));
       strcpy(de.name,".");
       dir_entries[0] = de;
@@ -609,6 +620,129 @@ static int fat_mkdir(const char* path, mode_t mode)
 
   return -ENOSPC;
 }
+
+
+
+
+
+
+
+static int fat_rmdir(const char* path)
+{
+
+  // separate path and name of last dir
+  char *parent_path = dirname(strdup(path));
+  char *dir_name = basename(strdup(path));
+
+
+  // can't make root
+  if(strcmp(path,"/") == 0) return -ENOENT;
+
+  // see if name is too long
+  if((strlen(basename(strdup(path)))>32) || (strlen(path) > PATH_MAX)){
+    return -ENAMETOOLONG;
+  }
+
+  dir_entry de;
+  dir_entry parent_de;
+  dir_entry grandparent_de;
+
+
+
+  char path2[PATH_MAX];
+  strcpy(path2,path);
+  if(path2[0] == '/'){
+    // path2++;
+    memmove(path2, path2+1, sizeof(path2)-1); //same fix as in getattr
+  }
+  // check if directory already exists (using parent_de, but not looking for parent directory entry, just for convenience)
+  int call_rslt = dir_exists(path2, 4, &de, dir_name);
+  if (call_rslt == -2) return -ENAMETOOLONG;
+  if (call_rslt == -1) return -ENOENT;
+  if (call_rslt == -3) return -ENOTDIR;
+  if (de.dir_type == 2) return -ENOTDIR;
+
+
+
+  dir_entry dir_entries[4096];//[((4096/sizeof(dir_entries)) + 1)];
+  memset(dir_entries, 0, sizeof(dir_entries));
+
+  // check if path leading to directory doesn't exist
+  if(strcmp(parent_path,"/") == 0) { // i am groot
+    //get appropriate directory entry for root
+    pread(fd_disk, &dir_entries, 4096, (4096*4));
+    parent_de.first_cluster = 4;
+    parent_de.file_size = dir_entries[0].file_size;
+    strcpy(parent_de.name,".");
+    parent_de.dir_type = 1;
+  } else { //if not root,
+    // prepare for dir_exists call
+
+    strcpy(path2,parent_path);
+    if(path2[0] == '/'){
+      // path2++;
+      memmove(path2, path2+1, sizeof(path2)-1); //same fix as in getattr
+    }
+
+    // get name of dir we want
+    char *dup = strdup(path2);
+    char *last;
+    last = basename(dup);
+
+    dir_exists(path2, 4, &parent_de, last);
+
+    // if parent isn't groot, we know it has a grandparent
+    // all we need is the cluster number, so get it from .. of parent
+    pread(fd_disk,&dir_entries, 4096, (4096*parent_de.first_cluster));
+    grandparent_de.first_cluster = dir_entries[1].first_cluster;
+  }
+
+  // check if directory is empty
+  pread(fd_disk, &dir_entries, 4096, (4096*de.first_cluster));
+  for (int i = 2; i < 4096; i++){
+    if (dir_entries[i].dir_type != 0){
+      return -ENOTEMPTY;
+    }
+  }
+  // 0 out the dir entry in parent
+  pread(fd_disk, &dir_entries, 4096, (4096*parent_de.first_cluster));
+  dir_entries[0].file_size--;
+
+  for (int i = 2; i < 4096; i++){
+    if (strcmp(dir_entries[i].name, de.name) == 0){
+      memset(&dir_entries[i], 0, sizeof(dir_entry));
+      break;
+    }
+  }
+  if (strcmp(parent_de.name, "/") == 0){
+    dir_entries[1].file_size--;
+  }
+  pwrite(fd_disk, &dir_entries, 4096, (4096*parent_de.first_cluster));
+
+  // 0 out the dir cluster
+  memset(&dir_entries, 0, 4096);
+  pwrite(fd_disk, &dir_entries, 4096, (4096*de.first_cluster));
+
+
+  // set fat entry as free
+  fat[de.first_cluster - 4] = 4000;
+  pwrite(fd_disk, &fat, 3*4096, 4096);
+
+
+  // decrease file size of parent in grandparent
+  if (parent_de.first_cluster != 4){
+    pread(fd_disk, &dir_entries, 4096, (4096*grandparent_de.first_cluster));
+    for (int i = 2; i < 4096; i++){
+      if (strcmp(dir_entries[i].name, parent_de.name) == 0){
+	dir_entries[i].file_size--;
+	break;
+      }
+    }
+    pwrite(fd_disk, &dir_entries, 4096, (4096*grandparent_de.first_cluster));
+  }
+  return 0;
+}
+
 
 
 
@@ -706,9 +840,11 @@ static int fat_mknod(const char* path, mode_t mode, dev_t rdev)
 
 
         //check mode to get permissions  
-        if (mode == (S_IFREG | 0444)) de.read_only = 1;
-        else de.read_only = 0;
-        memset(de.name,0,sizeof(de.name));
+        
+	//if (mode == (S_IFREG | 0444)) de.mode = S_IFREG | 0444;
+        //else de.mode = ;
+        de.mode = S_IFREG | mode;
+	memset(de.name,0,sizeof(de.name));
         strcpy(de.name,file_name);
 
 
@@ -768,48 +904,225 @@ static int fat_mknod(const char* path, mode_t mode, dev_t rdev)
 /////////////////////////////////////// user command interpretation ///////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-int description_helper(char *path, char *ret){
-  int i = 0;
-  for(int k = 0; strchr((path+i),'-') != NULL; k++){
-    
-    int index = strchr((path+i),'-')-(path);
-    ret[k] = path[index+1];
-    printf("%d, %c", index, ret[k]);
-    i = index + 1;
-  }
-  //if i is 0, no descriptions
-  if(i == 0) return 0;
+
+
+
+
+
+
+static void throw_error(int err, char *instruct, char *path){
+  ///////////////////// ERRORS!!! ///////////////////////
+  if(err == 0) return;
+  
   else{
-    //else adjust path and return 
-    path = &path[i+2]; //after the description character, and ' '
-    return i;
+    // base
+    if(path) printf("%s: %s: ", instruct, path);
+    else printf("%s: ", instruct);
+
+    if(err == -ENOTPERM) printf("Operation not permitted.\n");
+    else if(err == -ENOENT) printf("File doesn't exist.\n");
+    else if(err == -EACCES) printf("Permission denied.\n");
+    else if(err == -EEXIST) printf("File already exists.\n");
+    else if(err == -ENOTDIR) printf("Not a directory.\n");
+    else if(err == -EISDIR) printf("Is an existing directory.\n");
+    else if(err == -ENOSPC) printf("No more space.\n");
+    else if(err == -EMLINK) printf("Too many links.\n");
+    else if(err == -ENAMETOOLONG) printf("File or path name too long.\n");
+    else if(err == -ENOTEMPTY) printf("Directory not empty.\n");
+    else if(err == -ELOOP) printf("Too many links.\n");
   }
+  return;
 }
+
+
+
+
+
+
+
+
+int option_helper(char *instruct, char *command, char *paths, char *options, int *p_found){
+
+  if(command == NULL) return 0;
+  
+  char *op;
+  op = malloc(COM_LENGTH);
+  memset(op, 0, COM_LENGTH);
+  
+  memset(paths, 0, COM_LENGTH);
+
+  int path_found = 0; //after this turns to 1, no options can be taken in
+
+  int op_index = 0;
+
+  if(strtok(strdup(command), " ") == NULL){
+    strcpy(op,command);
+  }
+  else {
+    strcpy(op,strtok(strdup(command), " "));
+  }
+  while(op){
+
+    if(strcmp(instruct, "cd") == 0){
+      if(strstr(command, " -") != NULL){
+	free(op);
+	return -1; // cd shouldn't have any options
+      }
+      else{ //if a path, we only need the first path. We ignore all other paths user may have written. Unix rules, not me.
+	strcpy(paths,op);
+	*p_found = 1;
+	free(op);
+	return 0;
+      }
+    }
+
+    else if(strcmp(instruct, "ls") == 0){ //supports -l, -a
+      if((op[0] != '-') || (path_found != 0)){ // found a path, or found a path previously
+	if(path_found == 0) strcpy(paths, op); // if first time, add path
+	else{ // if not first path, add a space to divide, then add new path
+	  strcat(paths, " ");
+	  strcat(paths, op);
+	}
+	path_found++;
+      }
+      else{ //found an option
+	for(int i = 1; i < strlen(op); i++){ // from index 1 because we gotta ignore '-'
+	  if((op[i] == 'l') || (op[i] == 'a')){ //if it has any of these (don't care about repeats)
+	    if(op_index == 0) strcpy(options, (op + 1)); //if first option, add option
+	    else{ //f not first option, add a space to divide, then add new option
+	      strcat(options, " ");
+	      strcat(options, (op + 1));
+	    }
+	    op_index++;
+	  }
+	  else{
+	    free(op);
+	    return -1; //if not -a or -l or -la or -al, return -1
+	  }
+	}
+      }
+
+    }
+
+    else if(strcmp(instruct, "more") == 0){
+      
+    }
+
+    else if(strcmp(instruct, "less") == 0){
+      
+    }
+
+    else if(strcmp(instruct, "mkdir") == 0){ // supports -m, -p, -v
+      // not an option/path has been found
+      if((op[0] != '-') || (path_found != 0)){
+	if(path_found == 0) strcpy(paths, op);
+	else{
+	  strcat(paths, " ");
+	  strcat(paths, op);
+	}
+	path_found++;
+      }
+      else{ // its possibly a valid option
+	for(int i = 1; i < strlen(op); i++){ //scrutinize from after '-'
+	  if((op[i] == 'p') || (op[i] == 'v')){
+
+	    if(op_index == 0) strcpy(options, (op + 1)); //if first option, add option
+	    else{ //f not first option, add a space to divide, then add new option
+	      strcat(options, " ");
+	      strcat(options, (op + 1));
+	    }
+	    op_index++;
+	  }
+
+	  else if(op[i] == 'm'){
+	    if(i != (strlen(op) -1)){ //if there's a option following this one, error
+	      free(op);
+	      return -1; 
+	    }
+	    else if((op = strtok(NULL, " ")) && (op[0] != '-')){ // if it has something following it, and is not an option
+	      
+	      if(op_index == 0){ //if first option, add option
+		strcpy(options, "m ");
+		strcat(options, op); 
+	      }
+	      else{ //f not first option, add a space to divide, then add new option
+		strcat(options, " m ");
+		strcat(options, op);
+	      }
+	      op_index++;
+
+	    }
+	    else{ //otherwise, if it has nothing following it, or has a option following it, error
+	      free(op);
+	      return -1; 
+	    }
+	  }
+	  
+	}
+      }
+
+    }
+
+    else if(strcmp(instruct, "rmdir") == 0){ // supports -p
+      if((op[0] != '-') || (path_found != 0)){
+	if(path_found == 0) strcpy(paths, op);
+	else{
+	  strcat(paths, " ");
+	  strcat(paths, op);
+	}
+	path_found++;
+      }
+      else if(strcmp(op,"-p") == 0) // because p is the only option
+	op_index = 1; 
+      }
+      else{
+	free(op);
+	return -1;
+      }
+    }
+    else { //"echo"
+    
+    }
+
+    op = strtok(NULL, " ");
+  }
+  
+  if((path_found == 0) && (strcmp(instruct, "mkdir") == 0) && (strcmp(instruct, "rmdir") == 0)) return -1;
+  
+  *p_found = path_found;
+  free(op);
+  return op_index;
+}
+
+
+
+
+
 
 char* nodots_helper(char *path){ 
 
-  char ret[4096];
-  char dup[4096];
-  char dup2[4096];
+  char ret[COM_LENGTH];
+  char dup[COM_LENGTH];
+  char dup2[COM_LENGTH];
 
-  memset(ret,0,4096);
-  memset(dup,0,4096);
-  memset(dup2,0,4096);
+  memset(ret,0,COM_LENGTH);
+  memset(dup,0,COM_LENGTH);
+  memset(dup2,0,COM_LENGTH);
 
-  //9 base cases
-  //just "/."
+  //cases
+  // case1: just "/."
   if(strcmp(path,"/.") == 0){
     memset(path,0,strlen(path));
     path[0] = '/';
     return path;
   }
-  //just "/.."
+  // case2: just "/.."
   else if(strcmp(path,"/..") == 0){
     memset(path,0,strlen(path));
     path[0] = '/';
     return path;
   }
-  //starts with "/./...", or has "..././..."
+  // case 3: starts with "/./...", or has "..././..."
   else if(strstr(path,"/./") != NULL){
     // see if it starts "/./"
     if(strcmp(strstr(path,"/./"),path) == 0){
@@ -828,7 +1141,7 @@ char* nodots_helper(char *path){
     }
     return nodots_helper(ret);
   }
-  //starts with "/../...", or has ".../../..."
+  // case4: //starts with "/../...", or has ".../../..."
   else if(strstr(path,"/../") != NULL){
     // see if it starts with "/../"
     if(&(strstr(path,"/../")[0]) == & path[0]){
@@ -853,7 +1166,7 @@ char* nodots_helper(char *path){
     }
     return nodots_helper(ret);
   }
-  // seeing if path ends with "/." or "/.."
+  // case 5: seeing if path ends with "/." or "/.."
   else if(strstr(path,"/.") != NULL){
     //if path ends with /. (otherwise, it would be /./, or /.hi and etc.
     if(strcmp(strstr(path,"/."),"/.") == 0){       
@@ -869,8 +1182,9 @@ char* nodots_helper(char *path){
       return nodots_helper(ret);
     }
   }
-  // no dots
+  // case 6: no dots
   else {
+    // absolute bliss
     return path;
   }
   // shouldn't reach here, but...
@@ -879,12 +1193,10 @@ char* nodots_helper(char *path){
 
 
 
-static int instruct_ls(char *path){
 
-  char descriptions[PATH_MAX];
-  int num_descript = 0;
+// supports -al
+static int i_ls(char *path, char *options, int opt_num){
 
-  //  if((num_descript = description_helper(path,descriptions)) == 0){
   // read in subfiles of working directory
   
   int err = 0;
@@ -914,17 +1226,60 @@ static int instruct_ls(char *path){
     char *dup1 = strdup(workdir);
     strcat(dup1,path);
     
-      err = fat_readdir(dup1, dir_entries, 0);
+    err = fat_readdir(dup1, dir_entries, 0);
       
   }
   
   if(err != 0) return err;
   
-  // print out nonhidden subfiles of de.
+  // print out subfiles of de.
     for(int i = 0; i <4096; i++){
-      // if a dir entry isn't hidden (ie starts with .)
-      if((dir_entries[i].dir_type != 0) && (!(dir_entries[i].name[0] == '.'))){
-	printf("%s\t\t", dir_entries[i].name);
+      
+      if((dir_entries[i].dir_type != 0)){ // if no options
+	if(opt_num == 0){
+	  if(dir_entries[i].name[0] != '.') printf("%s\t\t", dir_entries[i].name);
+	}
+	else if((dir_entries[i].name[0] == '.') && (strchr(options, 'a') == NULL)) { // unless option '-a', hidden files are hidden!
+	  // if it starts with . but doesn't have '-a' option
+	}
+	else if(strchr(options, 'l') != NULL){
+	  int mode = dir_entries[i].mode;
+
+	  if((mode & S_IFDIR) != 0) printf("d");
+	  else if((mode & S_IFREG) != 0) printf("-");
+
+	  if((mode & S_IRUSR) != 0) printf("r");
+	  else printf("-");
+
+	  if((mode & S_IWUSR) != 0) printf("w");
+	  else printf("-");
+
+	  if((mode & S_IXUSR) != 0) printf("x");
+	  else printf("-");
+
+	  if((mode & S_IRGRP) != 0) printf("r");
+	  else printf("-");
+
+	  if((mode & S_IWGRP) != 0) printf("w");
+	  else printf("-");
+
+	  if((mode & S_IXGRP) != 0) printf("x");
+	  else printf("-");
+
+	  if((mode & S_IROTH) != 0) printf("r");
+	  else printf("-");
+
+	  if((mode & S_IWOTH) != 0) printf("w");
+	  else printf("-");
+
+	  if((mode & S_IXOTH) != 0) printf("x ");
+	  else printf("- ");
+
+
+	  // merry christmas.
+	  printf("%d\t%s\t%s\t%d %s %d %d:%d %s\n", 1, "user", "group", dir_entries[i].file_size, "Dec", 25, 12, 25, dir_entries[i].name);
+	}
+	else printf("%s\t\t", dir_entries[i].name);
       }
     }
     printf("\n");
@@ -939,14 +1294,9 @@ static int instruct_ls(char *path){
 
 
 
-static int instruct_cd(char *path){
+static int i_cd(char *path, char *options, int opt_num){
 
-  char descriptions[PATH_MAX];
-  int num_descript = 0;
 
-  
-  
-  //  if((num_descript = description_helper(path,descriptions)) == 0){
   // read in subfiles of working directory
   
   // in working directory
@@ -962,7 +1312,9 @@ static int instruct_cd(char *path){
   }
   else if(strcmp(path,"..") == 0){
     // if in root, no work.
-    if(strcmp(workdir,rootdir) == 0) return 0;
+    if(strcmp(workdir,rootdir) == 0){
+      return 0;
+    }
     // change working directory to previous directory
     strcpy(workdir,dirname(strdup(workdir)));
     
@@ -970,12 +1322,13 @@ static int instruct_cd(char *path){
     dir_entry de;
     dir_exists(workdir, 4, &de, basename(strdup(workdir)));
     workdir_clusternum = de.first_cluster;
+
     return 0;
   }
   else {    // in another directory
 
 
-    char dup[4096];
+    char dup[COM_LENGTH];
     strcpy(dup,path);
 
     
@@ -989,7 +1342,9 @@ static int instruct_cd(char *path){
     }      
     else { // if path is from working directory, concat with workdir path
       // see if path doesn't exceed size
-      if((strlen(workdir) + strlen(path)) > PATH_MAX) return -ENAMETOOLONG;
+      if((strlen(workdir) + strlen(path)) > PATH_MAX){
+	return -ENAMETOOLONG;
+      }
       memset(dup, 0, strlen(dup));
       strcpy(dup, workdir);
       strcat(dup,"/");
@@ -999,10 +1354,12 @@ static int instruct_cd(char *path){
 
     int err = 0;
     err = fat_access(dup,R_OK);    //path still works without taking care of . and ..
-    if(err != 0) return err;
+    if(err != 0){
+      return err;
+    }
 
     // take care of . and ..
-    char dup2[4096];
+    char dup2[COM_LENGTH];
     strcpy(dup2,dup);
     memset(dup,0,strlen(dup));
     strcpy(dup,nodots_helper(dup2));
@@ -1025,45 +1382,147 @@ static int instruct_cd(char *path){
 
 
 
-
-static int instruct_mkdir(char *path){
-  
-  char descriptions[PATH_MAX];
-  int num_descript = 0;
-
+//supports -mpv
+static int i_mkdir(char *path, char *options, int opt_num){
 
   
-  //if((num_descript = description_helper(path,descriptions)) == 0){
-  // read in subfiles of working directory
+  int err = 0;
   
-    
+
   // no path?
-  if(path == NULL) return -ENOENT;
+  if(path == NULL){
+    return -ENOENT;
+  }
+  
+  else {    // making new directory
+
+    // check options
+    int m = -1;
+    int p = 0;
+    int v = 0;  
+    
+    char option[COM_LENGTH];
+
+
+    if(strchr(options, 'p') != NULL) p = 1;
+    else if(strchr(options, 'v') != NULL) v = 1;
+    else if(strchr(options, 'm') != NULL){
+
+      m = 0;
+
+      int i = (strstr(options, "m ") - options) + 3;
+      //make sure permission bits are in correct format
+      for(int j = 0; j < 3; j++){
+	
+	// if permission bits are 0 through 7, set the corresponding m bit
+	if(((options[i+j] - '0') == 0 ) || ((options[i+j] - '0') <= 7))   m = m + ((options[i+j] - '0') * pow(8,(2-j)));
+	
+	else return -ECOMMAND;
+      }
+    }
+
+
+    // if m wasn't set to a certain permission bit, all dirs are 0755
+    if(m == -1) m = 0755;
+
+
+    char *dup;
+
+    // check if path is from root
+    if(path[0] == '/') dup = strdup(path);
+    // or if working directory is root
+    else if (strcmp(workdir,rootdir) == 0){
+      dup = strdup(rootdir);
+      strcat(dup,path);
+    }
+    else { // if path is from working directory, concat with workdir path
+      // see if path doesn't exceed size
+      if((strlen(workdir) + strlen(path)) > PATH_MAX){
+	return -ENAMETOOLONG;
+      }
+
+      dup = strdup(workdir);
+      strcat(dup,"/");
+      strcat(dup,path);
+
+      
+    }
+
+    
+    //check permission in parent directory
+    if(fat_access(dirname(strdup(dup)), W_OK) == -EACCES) return -EACCES; //if in root, dirname will just return root (assuming root == /)
+
+
+
+    err = fat_mkdir(dup, m);
+
+
+    // if a directory in path doesn't exist
+    if (err == -ENOENT){
+
+      // if option -p, then make all the directories as needed. Unless some other error shows up
+      if(p != 0){
+
+	err = i_mkdir(dirname(strdup(dup)),options,opt_num);
+
+	// if previous directories were created successfully, let there be directory
+	if(err == 0) err = fat_mkdir(dup,m); 
+      }
+
+      // otherwise, user wrote a stupid command. blame the player not the game.
+      else return -ENOENT;
+    }
+
+    if((v == 1) && (err == 0)) printf("mkdir: created directory '%s'\n", path);
+  }
+  
+
+
+  // if there are descriptions, switch by case (if statements in c)
+  return err;
+
+
+}
+
+
+
+
+
+
+
+static int i_rmdir(char *path){
+
+  int err = 0;
+
+  // no path?
+  if(path == NULL){
+    return -ENOENT;
+  }
   
   else {    // making new directory
       //check permission in parent directory
     
-    int err = 0;
     // check if path is from root
-    if(path[0] == '/') err = fat_mkdir(path,(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH));
+    if(path[0] == '/') err = fat_rmdir(path);
     // or if working directory is root
-    else if (strcmp(workdir,rootdir) == 0) err = fat_mkdir(strcat(strdup(rootdir),path),(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH));
+    else if (strcmp(workdir,rootdir) == 0) err = fat_rmdir(strcat(strdup(rootdir),path));
     else { // if path is from working directory, concat with workdir path
       // see if path doesn't exceed size
-      if((strlen(workdir) + strlen(path)) > PATH_MAX) return -ENAMETOOLONG;
+      if((strlen(workdir) + strlen(path)) > PATH_MAX){
+	return -ENAMETOOLONG;
+      }
+
       char *dup = strdup(workdir);
       strcat(dup,"/");
       strcat(dup,path);
-      err = fat_mkdir(dup,(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH));
+      err = fat_rmdir(dup);
       
     }
-    if (err != 0) return err;
+
   }
   
 
-  // if there are descriptions, switch by case (if statements in c)
-  return 0;
-
+  return err;
 
 }
 
@@ -1094,6 +1553,8 @@ int main(){
 
   int err = 0;
 
+  printf("%s user: ", workdir);
+
   // continuously get commands, until quit.
   fgets(command, COM_LENGTH, stdin);
   while (strcmp(command, "quit\n") != 0) {
@@ -1106,13 +1567,18 @@ int main(){
     if(strchr(command, ' ') == NULL){
       
       if(strcmp(command,"ls") == 0){
-	err = instruct_ls(NULL);
+	err = i_ls(NULL, NULL, 0);
+	throw_error(err,"ls",NULL);
       }
       else if(strcmp(command,"cd") == 0){
-	err = instruct_cd(NULL);
+	err = i_cd(NULL, NULL, 0);
+	throw_error(err,"cd",NULL);
       }
-      else if(strcmp(command,"mkdir") == 0){
-	err = instruct_mkdir(NULL);
+      else if(strcmp(command,"mkdir") == 0){ //should there be an error inherent
+	printf("mkdir: usage: mkdir [-pv] [-m mode] directory ...\n");
+      }
+      else if(strcmp(command,"rmdir") == 0){
+	printf("rmdir: usage: rmdir [-p] directory ...\n");
       }
       else if(strlen(command) == 0){
 	// do you wanna build a snow man-
@@ -1135,23 +1601,112 @@ int main(){
       strncpy(com,command,index);
 
 
+      // prepare to read in options and paths
+      char *paths = malloc(COM_LENGTH);
+      char *options = malloc(COM_LENGTH);
+      
+      int path_num = 0;
+      // stop, drop, and read
+      int opt_num = 0;
+      opt_num = option_helper(com,mand,paths,options,&path_num);
+      
+      char *path = malloc(COM_LENGTH);
+
       if(strcmp(com,"ls") == 0){
-	err = instruct_ls(mand);
+	// if command is in incorrect form
+	if(opt_num == -1) printf("ls: usage: ls [-al] directory ...\n");
+	
+	// if there is no path
+	if(path_num == 0){
+	  err = i_ls(NULL, options, opt_num);
+	  throw_error(err, "ls", NULL);
+	}
+
+	// for all the paths there are
+	path = strtok(paths," ");
+	while(path){
+	  err = i_ls(path, options, opt_num);
+	  throw_error(err, "ls", path);
+	  path = strtok(NULL, " ");
+	}
       }
+
+
       else if(strcmp(com,"cd") == 0){
-	err = instruct_cd(mand);
+	// if command is in incorrect form
+	if(opt_num == -1) printf("cd: usage: cd directory ...\n");
+
+	// if there is no path
+	if(path_num == 0){
+	  err = i_cd(NULL, options, opt_num);
+	  throw_error(err, "ls", NULL);
+	}
+	
+	// just for the first path
+	path = strtok(paths, " ");
+	err = i_cd(path, options, opt_num);
+	throw_error(err, "cd", path);
       }
+
+
       else if(strcmp(com,"more") == 0){
 	
       }
+
+
       else if(strcmp(com,"less") == 0){
 	
       }
+
+
       else if(strcmp(com,"mkdir") == 0){
-	err = instruct_mkdir(mand);
+	// if command is in incorrect form
+	if((opt_num == -1) || (path_num == 0)) err = -ECOMMAND;
+
+	// for all the paths there are
+	path = strtok(paths, " ");
+	while(path){
+	  err = i_mkdir(path, options, opt_num);
+	  throw_error(err, "mkdir", path);
+	  path = strtok(NULL, " ");
+	}
       }
+
+
       else if(strcmp(com,"rmdir") == 0){
-	
+	// if command is in incorrect form
+	if((opt_num == -1) || (path_num == 0)) err = -ECOMMAND;
+
+	// for all the paths there are
+	path = strtok(paths, " ");
+	while(path){
+	  err = i_rmdir(path);
+	  
+	  throw_error(err, "rmdir", path);
+
+	  //if option '-p' and we got rid of the path easily
+	  if((opt_num != 0) || (err != 0)){
+
+	    char *dup = malloc(COM_LENGTH);
+	    strcpy(dup, dirname(strdup(path)));
+
+	    while(strcmp(dup, "/") != 0){
+	      err = i_rmdir(dup);
+	      
+	      if(err != 0) {
+		throw_error(err, "rmdir", dup);
+		break;
+	      }
+	      else{
+	      strcpy(dup, dirname(strdup(dup)));
+	      
+	      }
+	    }
+
+	  }
+
+	  path = strtok(NULL, " ");
+	}
       }
       else if(strcmp(com,"echo") == 0){
 	
@@ -1159,22 +1714,17 @@ int main(){
       else {
 	printf("Error: Command not recognized.\n");
       }
-    
+
+    //clean house
+      free(paths); // should clean out path as well, because path = strtok(paths, ...)
+
+    free(options);
     }
 
 
-    ///////////////////// ERRORS!!! ///////////////////////
-    if(err == -ENOTPERM) printf("Operation not permitted.\n");
-    if(err == -ENOENT) printf("File doesn't exist.\n");
-    if(err == -EACCES) printf("Permission denied.\n");
-    if(err == -EEXIST) printf("File already exists.\n");
-    if(err == -ENOTDIR) printf("Not a directory.\n");
-    if(err == -EISDIR) printf("Is an existing directory.\n");
-    if(err == -ENOSPC) printf("No more space.\n");
-    if(err == -EMLINK) printf("Too many links.\n");
-    if(err == -ENAMETOOLONG) printf("File or path name too long.\n");
-    if(err == -ENOTEMPTY) printf("Directory not empty.\n");
-    if(err == -ELOOP) printf("Too many links.\n");
+    err = 0;
+
+
 
     printf("%s user: ", workdir);
     // next command. bring it on!
